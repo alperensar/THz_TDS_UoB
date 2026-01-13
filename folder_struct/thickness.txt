@@ -1,0 +1,3 @@
+material	thickness_mm	sigma_um	eps
+RADIX_2.8_6	3.0460	1.097
+RADIX_2.8_HT	2.9797	2.351773	

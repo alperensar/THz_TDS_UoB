@@ -1,0 +1,224 @@
+# config.yaml
+paths:
+  root_dir:             "/Users/alp/Desktop/Review_IEEE_T_THz/RAWDATA"  # root folder location for the scanned .pulse files IT DOESNOT WORK 
+  pulse_dir_names:      ["pulse"]                 # Folder names which includes all time_domain data
+  subdir_types:         ["film", "plate"]       # If there is a other folders inside the pulse forder includes the .pulse files
+  reference_filename:   "reference.txt"         # If reference measuremets are saved seperately with the name of specified.
+  thickness_file:       "thickness.txt"         # Thickness meaasurements their names are first-level folder name for each sample 
+  base_FFT_folder:      "FFT_data"              # base FFGT folder to save outputs  of MAT and TXT for each preprocessed FFT data
+  pickle_folder:        "pulsefft_Revision"     # Folder name to save pickle files inside each sample folder
+  processed_dir_names:  "Processed_Revision"    # Folder names which includes all extracted data
+  unwrap_log:           "unwrap_limits.txt"     # Unwrapping and extraping range frequencies for each setups their names are first-level folder name for each sample
+                                                # If it is not present it will create a new one after unwrapping process
+file_handling:
+  sample_column:        1                       # if sample and reference are at the same folder use 2rd column for sample signal (python index starts from 0)
+  reference_column:     2                       # if sample and reference are at the same folder use 3rd column for reference (python index starts from 0)
+  allow_self_reference: true                    # sample == reference case allowed (if both reference and measurements are in the same file)
+  extensions:           ["txt", "csv"]          # allowed data formats
+  time_unit:            "ps"                    # {"ps","ns","s"} pico nano seconds
+  required_cols:        ["material", "thickness_mm", "sigma_um", "eps"] # headers for thickness dataset in thickness_file
+
+fft:
+  zero_pad:             512                     # if sample points excees 512, it uses next 2^power
+  positive_only:        true                    # only use positive frequencies
+  logscale:             false                   # logarithmic representation
+  dc_offset_ps:         2.0                     # remove dc offset which taking reference 2 "time_unit" seconds  before the peak signal
+
+unwrap:
+  use_gui:              true                    # If true: use GUI for unwrapping range selection 
+  auto_save:            true                    # If true: automatically save unwrap limits to unwrap_log file
+  auto_load_previous:   true                    # If true: load previous unwrap limits from unwrap_log file if exists
+
+saving:
+  save_mat:             true                    # Save MATLAB .mat files for preprocessed data
+  save_txt:             true                    # Save TXT files for preprocessed data
+  save_pickle:          true                    # Save Pickle .pkl files for preprocessed data
+  complex_mode:         "both"                  # real_imag | mag_phase | both
+  no_save_mode:         false                   # If true: DO NOT write MAT/TXT/PKL (test mode)
+
+logging:
+  verbose:              true                    # If true: print detailed logs during processing
+  tqdm_width:           100                     # Width of tqdm progress bars in console
+
+instrument_profiles:
+  MENLO_UoB:
+    unwrap_range:             [0.3, 1.0]
+    extraction_range:         [0.3, 1.0]
+
+  Toptica_UoB:
+    unwrap_range:             [0.3, 1.0]
+    extraction_range:         [0.3, 1.5]
+
+  TOPTICA_NPL:
+    unwrap_range:             [0.3, 1.0]
+    extraction_range:         [0.3, 4.0]
+    custom_material_limits:
+      ROGERS_RO3003:          {extraction_max: 2.4 } # extraction_min extraction_max unwrap_max unwrap_min
+      ROGERS_RT5880RIC6:      {extraction_max: 3.5 }
+      RADIX_4.6:              {extraction_max: 2.4 }
+
+  TOPTICA_UoB:
+    unwrap_range:             [0.3, 1.0]
+    extraction_range:         [0.3, 1.7]
+    custom_material_limits:
+      RADIX_4.6:              {unwrap_max: 0.85 }
+
+run:
+  process_only_index:         null              # Example: 5  → only process 5th sample inside each pulse folder
+  start_from_index:           null              # Example: 3  → skip first 3 samples then continue
+  save_outputs:               true              # Save MAT/TXT files for processed data
+  save_unwrap_log:            true              # Save unwrap limits log file after processing
+  continue_on_error:          true              # Continue processing other samples if one fails for processed data
+
+param_estimation:
+  step1_algorithm:            "Nelder_Mead"     # For coarse sweeping and detection of the correct optimised thickness
+  step2_algorithm:            "Optimise"        # Final fine 
+  backend:                    "Serial"          # "Serial" | "Multiprocessing"
+  scanning_resolution:        81                # Number of steps for thickness sweep
+  scanning_range_mm:          0.4               # Thickness search range in mm (+/- this value)
+  calculation_cores:          8                 # Number of cores for multiprocessing mode specification:eg: 4 | "all-1"
+  processing_modes:           [[false, true], [true, false], [false, false], [true, true]] # NRNFP | RNFP | NRFP | NRFP |all. : all means it will run all four methods sequentially and save the results (NRNFP: w/o roughness w/o fp, RNFP: with roughness w/o fp, NRFP: w/o roughness with fp, RFP: with roughness with fp)
+  pkl_prefix:                 "1p4"             # Prefix for pickle files if there are more than 1 pickle files for the same sample
+  optimization_bounds:
+      n_bound:                0.15              # Percentage of the bound around the initial value for n
+      k_bound:                3                 # Percentage of the bound around the initial value for k
+
+filter:
+  processed_dir_name:         "Processed_Revision"
+  nr_dir_name:                "NR_FP"
+  r_dir_name:                 "R_FP"
+  output_dir_name:            "ProcessedFilter_Revision"
+  log_name:                   "TDSFilter.log"
+  window_default:             3
+  trial_iterations:           [5, 2]
+  n_col:                      2
+  k_col:                      3
+  verbose:                    true
+
+  # GUI defaults (used if no saved state exists in that Processed_Revision folder)
+  window_n_default:           3
+  iter_n_default:             5
+  window_k_default:           3
+  iter_k_default:             5
+
+  # GUI slider limits
+  window_min:                 0
+  window_max:                 51
+  iter_min:                   1
+  iter_max:                   20
+
+  freq_col_name:              "freq_Hz"
+
+  fmin_thz_default:           0.2
+  fmax_thz_default:           5
+
+merge:
+  processed_dir_name:         "ProcessedFilter_Revision"   # ya da sende neyse
+  nr_dir_name:                "NR_FP"
+  r_dir_name:                 "R_FP"
+
+  output_dir_name:            "MergedTDSFiltering"            # ProcessedFilter_Revision ile aynı seviyede açar
+  output_suffix:              "_Averaged"
+
+  log_name:                   "MergedFiltering.log"
+  summary_name:               "MergedFiltering_Summary.xlsx"
+
+  file_ext:                   ".xlsx"
+  sheet_name:                 0
+
+  freq_col_index:             0
+  strict_freq_match:          false   # frekanslar birebir aynı değilse inner-merge ile kesişime indirir
+  enforce_common_max_freq:    true
+  freq_round_decimals:        12
+
+plot:
+  output_dir_name:            "figures313fffd"
+
+  # LaTeX kullanacaksan:
+  latex:
+    enable:                   true
+    preamble: |
+      \usepackage{newtxtext}
+      \usepackage{newtxmath}
+
+  x_axis:
+    freq_min_ghz:             50
+    freq_max_ghz:             2500
+    x_ticks_ghz:              [50, 100, 200, 300, 500, 700, 1000, 1500, 2500]
+
+  y_axis:
+    eps_default:              [1.9, 3.7]
+    eps_radix46:              [4.1, 4.9]
+    tan_default:              [0.0, 0.045]
+    tan_top:                  [0.0, 0.085]
+    eps_top_radix46:          [4.1, 4.9]   # üst panel (RADIX_4.6) için
+
+  # VNA (CSV) okuma ayarları
+  vna:
+    enable:                   true
+    setups:                   ["Keysight_PNA_NPL", "Keysight_PNA_UoB"]
+    subdir_name:              "AveragedLast_Revision_S2P_Filtered"
+    file_ext:                 ".csv"
+    rough_token:              "Rough"     # dosya adında geçiyorsa rough kabul eder
+    freq_divisor:             1e9        # Hz -> GHz
+    columns:
+      freq:                   0                # veya "Freq_Hz" gibi column name
+      eps_mean:               1
+      eps_std:                2
+      tan_mean:               3
+      tan_std:                4
+
+  # TDS (Excel) okuma ayarları (MergedTDSFiltering çıktılarından)
+  tds:
+    enable: true
+    setups:                   ["MENLO_UoB", "TOPTICA_NPL", "TOPTICA_UoB", "Toptica_UoB"]
+    focus_modes:              ["Collimated", ""]    # Focused istemiyorsan koyma
+    merged_dir_name:          "MergedTDSFiltering"
+    file_ext:                 ".xlsx"
+    rough_token:              "_R_FP"               # örn: "..._R_FP_Averaged_Data.xlsx"
+    freq_divisor:             1e9
+    columns:
+      freq:                   0
+      eps_mean:               9
+      eps_std:                10
+      tan_mean:               13
+      tan_std:                14
+
+  # Örnek bazında frekans üst sınır override (GHz)
+  sample_freq_max_overrides:
+    ROGERS_TMM3:              2500
+    ROGERS_RT5880LZ:          2500
+    ROGERS_RT5880RIC6:        2500
+    RADIX_4.6:                2500
+
+  excluded_samples:
+    - "RADIX_2.8_7_CANCELLED"
+    - "RADIX_2.8_HT_Zprint_15_CANCELLED"
+    - "ROGERS_RO3003"
+
+
+# # Material specific overrides for parameter estimation
+# material_overrides:
+#   ROGERS_RT5880:
+#     eps:                      2.05
+#     measured_thickness_mm:    2.3
+#     sigma_um:                 20
+#     fp_terms:                 3
+    
+#   ROGERS_RT5880:
+#     eps:                      2.05
+#     measured_thickness_mm:    2.3
+#     sigma_um:                 20
+#     fp_terms:                 3
+
+# fp_estimation:
+#   enabled:                    true
+#   minimum_eps:                1.0               # air epsilon value
+#   auto_validate_periodicity:  true              # check if FP pulses repeat periodically
+#   periodicity_tolerance:      0.05              # ±5% tolerance
+#   interactive_selection:      True
+#   min_peaks_for_periodicity:  2
+
+# Those are the different settings for different materials. 
+# If you use please create second level folder inside the samples folder e.g. root / Sample / MENLO_UOB ....
+# if you use sample and setup dependent specifications plese also update config.py: otherwise it will give errors

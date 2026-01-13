@@ -1,0 +1,53 @@
+# --- Python build & cache ---
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# --- Virtual envs ---
+.venv/
+venv/
+env/
+
+# --- Editors / OS ---
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# --- Jupyter ---
+.ipynb_checkpoints/
+
+# --- Project outputs & logs ---
+runs/
+out*/
+outputs/
+logs/
+*.log
+*.csv
+
+# --- Checkpoints / models ---
+checkpoints/
+*.pt
+*.pth
+*.onnx
+
+# --- Data (büyük dosyalar) ---
+datasets/
+*.mat
+*.npy
+*.npz
+
+# --- Caches / experiment trackers ---
+.cache/
+wandb/
+mlruns/
+
+# --- Local-only configs (sample) ---
+configs/local.yaml
+.env

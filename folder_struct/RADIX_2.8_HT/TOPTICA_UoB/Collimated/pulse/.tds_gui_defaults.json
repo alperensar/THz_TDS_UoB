@@ -1,0 +1,11 @@
+{
+  "noise_floor_db": -71.0,
+  "max_freq_before_noise": 2.2,
+  "f_min_extract": 300000000000.0,
+  "f_max_extract": 2000000000000.0,
+  "unwrap_fit_min": 300000000000.0,
+  "unwrap_fit_max": 1000000000000.0,
+  "fp_term_count": 2,
+  "use_backup_unwrap": true,
+  "version": 1
+}

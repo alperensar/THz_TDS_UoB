@@ -1,0 +1,11 @@
+{
+  "window_n": 5,
+  "iter_n": 5,
+  "window_k": 5,
+  "iter_k": 5,
+  "fmin_thz": 0.2,
+  "fmax_thz": 1.1,
+  "n_ylim_pct": 10.0,
+  "k_ylim_mult": 1.2,
+  "version": 3
+}
