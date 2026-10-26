@@ -34,7 +34,8 @@ PHASE_WEIGHT = 1.0  # Weight factor for phase error in least squares
 def plot_final_results(save_path: Path, freqs: np.ndarray, n: np.ndarray, k: np.ndarray, 
                        H_meas: np.ndarray, H_model: np.ndarray, alpha: np.ndarray, 
                        alpha_max: np.ndarray, error: np.ndarray,
-                       bounds: Optional[Tuple] = None):
+                       bounds: Optional[Tuple] = None,
+                       display_limits_hz: Optional[Tuple[float, float]] = None):
     
     freq_THz = freqs / 1e12 
     
@@ -42,7 +43,7 @@ def plot_final_results(save_path: Path, freqs: np.ndarray, n: np.ndarray, k: np.
     plt.rcParams["font.family"] = "Times New Roman"
     plt.rcParams["font.size"] = 10
     
-    grid_kwargs = {"visible": True, "linestyle": '--', "alpha": 0.4}
+    grid_kwargs = {"visible": True, "linestyle": '--', "alpha": 0.5, "linewidth": 1.0}
     legend_kwargs = {"loc": "best", "fontsize": 10, "framealpha": 0.9}
     label_fontsize = 11
     title_fontsize = 12
@@ -133,7 +134,8 @@ def plot_final_results(save_path: Path, freqs: np.ndarray, n: np.ndarray, k: np.
     ax_err.grid(**grid_kwargs)
     
     # Common X-axis limits
-    x_min, x_max = np.min(freq_THz), np.max(freq_THz)
+    x_min, x_max = (np.asarray(display_limits_hz) / 1e12 if display_limits_hz is not None
+                    else (np.min(freq_THz), np.max(freq_THz)))
     for ax in axs.flat:
         ax.set_xlim(x_min, x_max)
         ax.tick_params(axis='both', which='major', labelsize=10)
@@ -193,8 +195,11 @@ def calculate_physics_metrics(pair: Any, best_L: float, n: np.ndarray, k: np.nda
     ref_amp = np.abs(pair.fft_reference[pair.x_min_index : pair.x_max_index + 1])
     DR      = ref_amp / (noise_floor_val + EPS_VAL)
     DR_dB   = 20.0 * np.log10(DR + EPS_VAL)
-    
-    alpha_max = (2.0 / (best_L * 100.0)) * np.log(DR)
+
+    # Jepsen & Fischer: alpha_max = (2/L) ln(DR * 4n/(n+1)^2), DR >= 1 (same as utils.recalculate_absorption)
+    F3 = (4.0 * n) / ((n + 1.0) ** 2)
+    arg3 = np.clip(np.maximum(DR, 1.0) * F3, EPS_VAL, None)
+    alpha_max = (2.0 / (best_L * 100.0)) * np.log(arg3)
 
     # 6. Deltas (Final - Seed)
     delta_N      = n - n_S
@@ -215,6 +220,8 @@ def calculate_physics_metrics(pair: Any, best_L: float, n: np.ndarray, k: np.nda
     # Pack everything into a dictionary
     return {
         'freqs':        freqs,
+        'display_limits_hz': (float(getattr(pair, 'f_min_extract', np.min(freqs))),
+                              float(getattr(pair, 'f_max_extract', np.max(freqs)))),
         'H_meas':       H_meas,
         'H_model':      H_model,
         
@@ -324,7 +331,8 @@ def save_full_excel(out_dir: Path, tag: str, best_L: float, metrics: Dict[str, A
         logger.error(f"Excel save failed: {e}")
 
     # Pass the unpacked data to plot function
-    plot_final_results(filename, freqs, m['n'], m['k'], m['H_meas'], m['H_model'], m['alpha'], m['alpha_max'], m['err_abs'], bounds)
+    plot_final_results(filename, freqs, m['n'], m['k'], m['H_meas'], m['H_model'], m['alpha'], m['alpha_max'], m['err_abs'], bounds,
+                       display_limits_hz=m.get('display_limits_hz'))
 
 def save_comprehensive_results(out_dir: Path, tag: str, pair: Any, best_L: float, n: np.ndarray,
     k: np.ndarray,  H_model: np.ndarray, bounds: Optional[Tuple], meta_algos: Dict[str, str],
@@ -351,8 +359,10 @@ def save_comprehensive_results(out_dir: Path, tag: str, pair: Any, best_L: float
     # 3) Sweep TV formatting for MATLAB
     tv_sweep = np.array([])
     if tv_scores:
-        tv_L = np.array(sorted(tv_scores.keys()), dtype=float)  # meters
-        tv_V = np.array([tv_scores[L] for L in tv_L], dtype=float)
+        # calculate_total_variation and ThicknessSelector key thicknesses in micrometres.
+        tv_keys_um = sorted(tv_scores)
+        tv_L = np.asarray(tv_keys_um, dtype=float) * 1e-6
+        tv_V = np.array([tv_scores[key] for key in tv_keys_um], dtype=float)
         tv_sweep = np.column_stack([tv_L, tv_V])  # Nx2 [L_m, TV]
 
     thickness_sweep_vec = (np.asarray(thickness_sweep_m, dtype=float) if thickness_sweep_m is not None else np.array([]))
@@ -400,7 +410,7 @@ def save_comprehensive_results(out_dir: Path, tag: str, pair: Any, best_L: float
             "error_complex":    np.asarray(m['err_complex']), 
             "error_abs":        np.asarray(m['err_abs']), 
             "residual_mag":     np.abs(m['H_meas']) - np.abs(m['H_model']),
-            "residual_phase":   np.unwrap(np.angle(m['H_meas'])) - np.unwrap(np.angle(m['H_model'])),
+            "residual_phase":   np.unwrap(np.angle(m['H_meas'] * np.conj(m['H_model']))),
 
             # Sweep metadata
             "thickness_sweep_m": thickness_sweep_vec,
@@ -506,8 +516,8 @@ def save_comprehensive_results(out_dir: Path, tag: str, pair: Any, best_L: float
 # PHYSICS MODELS
 def init_params_guess(pair: Any, freqs_array: np.ndarray, L: float) -> Tuple[np.ndarray, np.ndarray]:
     """
-    Estimates initial guesses for refractive index (ns_guess) and extinction coefficient (ks_guess) at a specific frequency.
-    Mira's book 2.23a and 2.23b initializing the complex refractive index
+    Analytic seed for n(f) and kappa(f) (Mira, 2.23a/b). Neglects roughness and FP,
+    so the amplitude-derived kappa also absorbs roughness loss and FP interference.
     """
     omega_L = 2 * np.pi * freqs_array * L
     omega_L[omega_L == 0] = EPS_VAL
@@ -525,7 +535,12 @@ def init_params_guess(pair: Any, freqs_array: np.ndarray, L: float) -> Tuple[np.
     return ns_guess, ks_guess
 
 def sigma_sum_FP(pair: Any, ns: np.ndarray, ks: np.ndarray, L: float, omega: np.ndarray, roughness: bool = False) -> np.ndarray:
-    """Computes the Fabry–Pérot multiple reflection sum using a geometric series."""
+    """
+    Finite FP sum  sum_m R^m exp(-2i m n~ w L/c) exp(-0.5 [((2m+1) n~ - 1) w sigma/c]^2)
+    for a Gaussian thickness distribution (std sigma_um) at a fixed detector plane.
+    Order m travels (2m+1) slab passes plus the remaining air path, hence the (2m+1)n~ - 1
+    sensitivity. The direct-pass phase and transmission factor are applied by the caller.
+    """
     n_tilde = ns - 1j * ks
     total = np.zeros_like(n_tilde, dtype=complex)
 
@@ -533,52 +548,34 @@ def sigma_sum_FP(pair: Any, ns: np.ndarray, ks: np.ndarray, L: float, omega: np.
 
     rough_val = pair.sigma_um * 1E-6 if roughness else 0.0
     
-    # Limit FP pulses to avoid infinite loops if not set
+    # m=0 is the direct pass; fp_term_count is the largest retained order M.
     fp_limit = pair.fp_term_count or 0
     for m in range(max(1, fp_limit + 1)):
         phase_term = np.exp(-1j * 2 * m * n_tilde * omega * L / c)
-        envelope = np.exp(- ((2 * m + 1)**2) * (n_tilde**2) * omega**2 * rough_val**2 / (2 * c**2))
+        path_sensitivity = (2 * m + 1) * n_tilde - 1          # complex square, not |.|^2
+        envelope = np.exp(-0.5 * (path_sensitivity * omega * rough_val / c)**2)
         total += (R**m) * phase_term * envelope
 
     return total
 
 def calculate_model_H(pair: Any, ns: np.ndarray, ks: np.ndarray, L: float, roughness: bool = False, FP: bool = False, omega: np.ndarray = None) -> np.ndarray:
     """
-    Calculates the theoretical Transfer Function H(w) based on the physical model.
-    Modes: Standard, Roughness corrected, FP corrected, or both.
+    Coherent transfer function H = T exp(-i(n~-1) w L/c) * FP-sum at a fixed detector plane.
+    FP=False keeps only m=0; roughness=False sets sigma=0.
     """
-    c2 = 2 * c**2
-    
     if omega is None:
         omega = 2 * np.pi * pair.freqs_interest
-    
-    omega2 = omega**2 
 
     n_tilde = ns - 1j * ks
-    n_tilde2 = n_tilde**2
     coeff = 4 * n_tilde / ((n_tilde + 1)**2) 
 
     exponent1_term = -1j * (n_tilde - 1) * omega * L / c
+    direct = coeff * np.exp(exponent1_term)
+    if FP:
+        return direct * sigma_sum_FP(pair, ns, ks, L, omega, roughness=roughness)
 
-    if roughness:
-        sigma = pair.sigma_um * 1E-6
-        sigma2 = sigma**2
-        exponent2_term = np.exp((sigma2 * omega2) / c2)
-        
-        if FP:
-            fp_term = sigma_sum_FP(pair, ns, ks, L, omega, roughness=True)
-            H_model = coeff * np.exp(exponent1_term) * exponent2_term * fp_term
-        else:
-            H_model = coeff * np.exp(exponent1_term) * exponent2_term * np.exp(- n_tilde2 * omega2 * sigma2 / c2)
-    
-    else:
-        if FP:                                                     
-            fp_term = sigma_sum_FP(pair, ns, ks, L, omega, roughness=False)
-            H_model = coeff * np.exp(exponent1_term) * fp_term        
-        else:
-            H_model = coeff * np.exp(exponent1_term) 
-            
-    return H_model
+    sigma = pair.sigma_um * 1E-6 if roughness else 0.0
+    return direct * np.exp(-0.5 * ((n_tilde - 1) * omega * sigma / c)**2)
 
 def errorFun_Nelder_Mead_total(params_vector: np.ndarray, pair: Any, freqs_interest: np.ndarray, L: float, roughness: bool = False, FP: bool = False) -> float:
     """Computes total error. """
@@ -605,12 +602,8 @@ def errorFun_Nelder_Mead_individual(params_pair: np.ndarray, pair: Any, freq_poi
     """ Computes error for a SINGLE frequency point."""
     n_val, k_val = params_pair
     
-    omega = 2 * np.pi * freq_point
-    n_tilde = n_val - 1j * k_val
-    
-    coeff = 4 * n_tilde / ((n_tilde + 1)**2)
-    exponent = -1j * (n_tilde - 1) * omega * L / c
-    H_model = coeff * np.exp(exponent)
+    H_model = calculate_model_H(pair, np.array([n_val]), np.array([k_val]), L,
+        roughness=roughness, FP=FP, omega=np.array([2*np.pi*freq_point]))[0]
     
     meas_H = pair.measured_H[pair.x_min_index + idx]
     
@@ -643,6 +636,13 @@ def errorFun_least_squares(params_vector, pair, freqs_array, L, roughness, FP):
 
     return residual_mag_phase(H_meas, H_model, phase_weight=PHASE_WEIGHT, w=w, unwrap=True)
 
+K_ABS_ALLOWANCE = 0.03   # absolute kappa half-width added to the % window (seed kappa can be ~0)
+
+def _warn_if_not_converged(res, L: float, label: str) -> None:
+    """Both minimize and least_squares set success=False when the evaluation budget is hit."""
+    if not res.success:
+        logger.warning("L=%.6g mm: %s did not converge (status=%s): %s", L*1e3, label, getattr(res, "status", None), res.message)
+
 def run_param_extraction(args: Tuple[Any, float, Dict]) -> Tuple[float, Optional[Tuple]]:
     """  Master function to run extraction based on configuration. """
     try:
@@ -663,11 +663,17 @@ def run_param_extraction(args: Tuple[Any, float, Dict]) -> Tuple[float, Optional
                 return obj.get(key, default)
             return getattr(obj, key, default)
 
-        # ONLY percentage windows (defaults if not given)
-        n_window = float(bounds_cfg.n_bound)  # e.g. 0.02 => ±2%
-        k_window = float(bounds_cfg.k_bound)  # e.g. 0.40 => ±40%
+        algo_key = str(algo).strip().lower().replace("_", "-")
+        if algo_key in {"nelder-mead", "neldermead", "nm"}:
+            algo_mode = "nelder-mead"
+        else:
+            algo_mode = "optimise"
 
-        # Initial Guess
+        # ONLY percentage windows (defaults if not given)
+        n_window = float(get_val(bounds_cfg, "n_bound", 0.05))  # e.g. 0.02 => ±2%
+        k_window = float(get_val(bounds_cfg, "k_bound", 0.60))  # e.g. 0.40 => ±40%
+
+        # Initial Guess (analytic)
         ns_guess, ks_guess = init_params_guess(pair, freqs, L)
         if len(ns_guess) != num_freqs:
             ns_guess = np.resize(ns_guess, num_freqs)
@@ -676,6 +682,33 @@ def run_param_extraction(args: Tuple[Any, float, Dict]) -> Tuple[float, Optional
         ns_guess = np.asarray(ns_guess, dtype=float)
         ks_guess = np.asarray(ks_guess, dtype=float)
 
+        # Optional warm-start from a previous mode (e.g., NR_* -> R_*)
+        warm_start = False
+        seed_n = cfg.get("seed_n", None)
+        seed_k = cfg.get("seed_k", None)
+        if seed_n is not None and seed_k is not None:
+            try:
+                seed_n_arr = np.asarray(seed_n, dtype=float).reshape(-1)
+                seed_k_arr = np.asarray(seed_k, dtype=float).reshape(-1)
+                if seed_n_arr.size == num_freqs and seed_k_arr.size == num_freqs:
+                    if np.all(np.isfinite(seed_n_arr)) and np.all(np.isfinite(seed_k_arr)):
+                        ns_guess = seed_n_arr.copy()
+                        ks_guess = seed_k_arr.copy()
+                        warm_start = True
+                    else:
+                        logger.warning("Warm-start seed contains non-finite values. Falling back to analytic seed.")
+                else:
+                    logger.warning(
+                        "Warm-start seed length mismatch (n=%d, k=%d, expected=%d). Falling back to analytic seed.",
+                        seed_n_arr.size, seed_k_arr.size, num_freqs
+                    )
+            except Exception as e:
+                logger.warning(f"Warm-start seed parse failed: {e}. Falling back to analytic seed.")
+
+        # The analytic kappa seed goes negative where |H| exceeds the Fresnel limit (FP
+        # interference, noise); a negative centre would invert the k bounds below.
+        ks_guess = np.maximum(ks_guess, 0.0)
+
         initial_guess = np.concatenate([ns_guess, ks_guess])
 
         cost_val = 0.0
@@ -683,10 +716,11 @@ def run_param_extraction(args: Tuple[Any, float, Dict]) -> Tuple[float, Optional
         n_final, k_final = None, None
 
         # NELDER–MEAD (no bounds)
-        if algo == "Nelder-Mead":
+        if algo_mode == "nelder-mead":
             if whole_freq:
                 res = minimize(errorFun_Nelder_Mead_total, initial_guess, args=(pair, freqs, L, rough, fp),
                     method='Nelder-Mead', options={'maxiter': 10000, 'xatol': ERR})
+                _warn_if_not_converged(res, L, "Nelder-Mead global")
                 n_final  = res.x[:num_freqs]
                 k_final  = res.x[num_freqs:]
                 cost_val = res.fun
@@ -717,7 +751,7 @@ def run_param_extraction(args: Tuple[Any, float, Dict]) -> Tuple[float, Optional
                 H_meas_all = pair.measured_H[pair.x_min_index : pair.x_max_index + 1]
                 assert H_meas_all.shape[0] == num_freqs, (H_meas_all.shape[0], num_freqs)
 
-                # Build per-frequency bounds around the SEED (ns_guess, ks_guess)
+                # Per-frequency bounds centred on the seed (a biased seed can exclude the true solution)
                 # n bounds: ± n_window
                 n_delta = np.maximum(np.abs(ns_guess) * n_window, 1e-6)
                 n_lb = ns_guess - n_delta
@@ -726,16 +760,19 @@ def run_param_extraction(args: Tuple[Any, float, Dict]) -> Tuple[float, Optional
                 # keep n physically > 0 (tiny clamp)
                 n_lb = np.maximum(n_lb, 1e-6)
 
-                # k bounds: ± k_window * max(|k|, k_floor)
+                # k bounds: ± k_window * max(|k|, k_floor), plus an absolute 0.03 allowance
                 k_floor = 1e-6
                 k_scale = np.maximum(np.abs(ks_guess), k_floor)
-                k_delta = k_scale * k_window + 0.03
-                k_lb = ks_guess - k_delta
-                k_ub = ks_guess + k_delta
+                k_delta = k_scale * k_window + K_ABS_ALLOWANCE
+                k_lb = np.maximum(ks_guess - k_delta, 1e-10)
+                k_ub = np.maximum(ks_guess + k_delta, k_lb + 1e-6)   # never an inverted interval
 
                 # Combine into solver bounds
                 lb = np.concatenate([n_lb, k_lb])
                 ub = np.concatenate([n_ub, k_ub])
+
+                # least_squares rejects x0 outside the bounds; project the seed in
+                initial_guess = np.clip(initial_guess, lb, ub)
 
                 def global_cost(p):
                     ns_curr = p[:num_freqs]
@@ -749,6 +786,7 @@ def run_param_extraction(args: Tuple[Any, float, Dict]) -> Tuple[float, Optional
                     return residual_mag_phase(H_meas_all, H_sim, phase_weight=PHASE_WEIGHT, w=w, unwrap=True)
 
                 res = least_squares(global_cost, initial_guess, bounds=(lb, ub), method='trf', loss='soft_l1', verbose=0)
+                _warn_if_not_converged(res, L, "least_squares global")
 
                 n_final = res.x[:num_freqs]
                 k_final = res.x[num_freqs:]
@@ -773,13 +811,15 @@ def run_param_extraction(args: Tuple[Any, float, Dict]) -> Tuple[float, Optional
                 current_k = float(ks_guess[0])
 
                 total_cost = 0.0
+                not_converged = 0
 
                 for i in range(num_freqs):
                     seed_n = float(ns_guess[i])
                     seed_k = float(ks_guess[i])
 
-                    # chaining reference
-                    if i == 0:
+                    # warm-start seeds are per frequency, use them directly; otherwise chain
+                    # from the previous fit (first frequency always uses its own seed)
+                    if warm_start or i == 0:
                         ref_n, ref_k = seed_n, seed_k
                     else:
                         ref_n, ref_k = current_n, current_k
@@ -790,9 +830,9 @@ def run_param_extraction(args: Tuple[Any, float, Dict]) -> Tuple[float, Optional
                     n_ub = ref_n + dn
 
                     k_floor = 1e-6
-                    dk = max(max(abs(ref_k), k_floor) * k_window, 1e-6)
-                    k_lb = ref_k - dk
-                    k_ub = ref_k + dk
+                    dk = max(abs(ref_k), k_floor) * k_window + K_ABS_ALLOWANCE
+                    k_lb = max(ref_k - dk, 1e-10)
+                    k_ub = max(ref_k + dk, k_lb + 1e-6)
 
                     n_lb_h[i] = n_lb
                     n_ub_h[i] = n_ub
@@ -800,7 +840,7 @@ def run_param_extraction(args: Tuple[Any, float, Dict]) -> Tuple[float, Optional
                     k_ub_h[i] = k_ub
 
                     bounds = (np.array([n_lb, k_lb]), np.array([n_ub, k_ub]))
-                    p0 = np.array([ref_n, ref_k], dtype=float)
+                    p0 = np.clip(np.array([ref_n, ref_k], dtype=float), bounds[0], bounds[1])
 
                     freq_point = freqs[i]
                     H_meas_i = pair.measured_H[pair.x_min_index + i]
@@ -813,11 +853,13 @@ def run_param_extraction(args: Tuple[Any, float, Dict]) -> Tuple[float, Optional
                         return residual_mag_phase( np.array([H_meas_i]), np.array([H_sim_i]), phase_weight=PHASE_WEIGHT, w=None, unwrap=True)
 
                     try:
-                        res_i = least_squares(single_point_cost, p0,  bounds=bounds,method='trf', loss='soft_l1', max_nfev=80, verbose=0)
+                        res_i = least_squares(single_point_cost, p0,  bounds=bounds,method='trf', loss='soft_l1', max_nfev=200, verbose=0)
+                        not_converged += int(not res_i.success or res_i.status == 0)
                         new_n, new_k = float(res_i.x[0]), float(res_i.x[1])
                         total_cost += float(res_i.cost)
-                    except Exception:
-                        new_n, new_k = ref_n, ref_k
+                    except Exception as exc:
+                        logger.warning("Pointwise optimization failed at %.6g Hz: %s; retaining bounded seed.", freq_point, exc)
+                        new_n, new_k = float(p0[0]), float(p0[1])
 
                     # update
                     n_final[i] = new_n
@@ -825,6 +867,8 @@ def run_param_extraction(args: Tuple[Any, float, Dict]) -> Tuple[float, Optional
                     current_n, current_k = new_n, new_k
 
                 cost_val = total_cost
+                if not_converged:
+                    logger.warning("L=%.6g mm: %d/%d pointwise fits did not converge.", L*1e3, not_converged, num_freqs)
 
                 n_bound = (n_lb_h, n_ub_h)
                 k_bound = (k_lb_h, k_ub_h)
@@ -834,7 +878,7 @@ def run_param_extraction(args: Tuple[Any, float, Dict]) -> Tuple[float, Optional
         return L, (n_final, k_final, H_calc, L, cost_val, bounds_tuple)
 
     except Exception as e:
-        print(f"Extraction failed for L={L}: {e}")
+        logger.error(f"Extraction failed for L={L}: {e}")
         return L, None
     
 def worker_process(task_queue: Queue, result_queue: Queue):
@@ -855,148 +899,20 @@ def worker_process(task_queue: Queue, result_queue: Queue):
             else:
                 result_queue.put((L, None))
 
-def L_key_um(L_m: float) -> int:
-    # metre → mikrometre (µm)
-    return int(round(float(L_m) * 1e6))
+def L_key_um(L_m: float) -> float:
+    # metre → mikrometre, nm hassasiyetine yuvarlanmış (1 µm altı tarama adımları da ayrışır)
+    return round(float(L_m) * 1e6, 3)
 
-def calculate_total_variation(data_dict: dict) -> dict[int, float]:
+def calculate_total_variation(data_dict: dict) -> dict[float, float]:
+    """TV of n and k per thickness, keyed by micrometres (see L_key_um)."""
     tv_dict = {}
     for L, val in data_dict.items():
         if val is None:
             continue
+        key = L_key_um(L)
+        if key in tv_dict:
+            raise ValueError(f"Thickness sweep step is below 1 nm: {L*1e3:.6f} mm maps to an existing key {key} um.")
         n_val, k_val = val[0], val[1]
         tv = np.sum(np.abs(np.diff(n_val))) + np.sum(np.abs(np.diff(k_val)))
-        tv_dict[L_key_um(L)] = float(tv)
+        tv_dict[key] = float(tv)
     return tv_dict
-
-
-# def errorFun_least_squares(params_vector: np.ndarray, pair: Any, freqs_array: np.ndarray, L: float, roughness: bool, FP: bool) -> np.ndarray:
-#     """Residual function with PHASE PRIORITY."""
-#     num_freqs = len(freqs_array)
-#     ns_array = params_vector[:num_freqs]
-#     ks_array = params_vector[num_freqs:]
-    
-#     H_meas = pair.measured_H[pair.x_min_index : pair.x_max_index + 1]
-#     H_model = calculate_model_H(pair, ns_array, ks_array, L, roughness, FP)
-    
-#     # Logaritmik Fark
-#     log_meas  = np.log(H_meas + EPS_VAL)
-#     log_model = np.log(H_model + EPS_VAL)
-#     diff = log_meas - log_model
-        
-#     res_real = diff.real       # Genlik Hatası (Kappa/Alpha için)
-#     res_imag = diff.imag * PHASE_WEIGHT # Faz Hatası (n için)
-    
-#     return np.concatenate([res_real, res_imag])
-
-# ERROR FUNCTIONS
-# def compute_mag_phase_errors(pair: Any, full_model, freqs_interest: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
-#     """Error calculation between measured and model H in terms of magnitude and phase for Nelder_Mead."""
-#     low_bound = pair.x_min_index
-#     upp_bound = pair.x_max_index
-
-#     measured_H_roi = pair.measured_H[low_bound:upp_bound+1]
-#     zero_phase_roi = pair.unwrapped_phase[low_bound:upp_bound+1]
-
-#     # Magnitude error
-#     if full_model.shape[0] != measured_H_roi.shape[0]:
-#         raise ValueError(f"full_model len={full_model.shape[0]} is not match  measured_H_roi len={measured_H_roi.shape[0]}.")
-#     M_omega = np.abs(full_model) - np.abs(measured_H_roi)
-
-#     # Phase unwrapping for model
-#     raw_phase = np.angle(full_model)
-#     unwrapped_phase, _ = utils.unwrap_phase(raw_phase)
-
-#     i1 = utils.find_index(freqs_interest, pair.unwrap_fit_min)
-#     i2 = utils.find_index(freqs_interest, pair.unwrap_fit_max)
-#     popt = np.polyfit(freqs_interest[i1:i2+1], unwrapped_phase[i1:i2+1], 1)
-#     interpolated_phase = unwrapped_phase - np.abs(popt[1])
-   
-#     A_omega = interpolated_phase - zero_phase_roi
-
-#     return M_omega, A_omega
-
-# def errorFun_Nelder_Mead_total(pair: Any, params_vector: np.ndarray, freqs_interest: np.ndarray,
-#     L: float, roughness: bool = False, FP: bool = False, verbose: bool = False) -> float:
-#     """
-#     Computes the total error (magnitude + phase) for a given set of parameters using manual unwrapping.
-#     This outputs the error function that is to be minimized via Nelder-Mead
-#     As in Mira Naftaly's book calculate for whole frequency range not individual as in previous
-#     """
-#     freqs_interest = np.asarray(freqs_interest)
-#     num_freqs = len(freqs_interest)
-
-#     if params_vector.size != 2 * num_freqs:
-#         raise ValueError("Parameter vector size does not match expected size.")
-
-#     # n(f) and k(f) vectors
-#     ns = params_vector[:num_freqs]
-#     ks = params_vector[num_freqs:]
-
-#     # Model H(f) calculation
-#     full_model = calculate_model_H(pair, ns, ks, L, roughness, FP)
-
-#     # Amplitude and Phase errors
-#     M_omega, A_omega = compute_mag_phase_errors(pair, full_model, freqs_interest)
-
-#     # Toplam hata (L1 normu)
-#     mag_error_sum = np.sum(np.abs(M_omega))
-#     phase_error_sum = np.sum(np.abs(A_omega))
-#     total_error = mag_error_sum + phase_error_sum
-
-#     if verbose:
-#         print(f"M_omega Sum: {mag_error_sum:.6f} | A_omega Sum: {phase_error_sum:.6f} " f"| Total: {total_error:.6f}")
-
-#     return total_error
-
-# def errorFun_Nelder_Mead_individual(pair: Any, ns: float, ks: float, freqs_interest: np.ndarray, 
-#     L: float, roughness: bool = False, FP: bool = False, verbose: bool = False) -> float:
-#     """ 
-#      Computes the total error (magnitude + phase) for a given set of parameters using manual unwrapping.
-#      This outputs the error function that is to be minimized via Nelder-Mead
-#     """
-#     freqs_interest = np.asarray(freqs_interest)
-#     num_freqs = len(freqs_interest)
-
-#     ns_vec = np.full(num_freqs, float(ns), dtype=float)
-#     ks_vec = np.full(num_freqs, float(ks), dtype=float)
-
-#     full_model = calculate_model_H(pair, ns_vec, ks_vec, L, roughness, FP)
-#     M_omega, A_omega = compute_mag_phase_errors(pair, full_model, freqs_interest)
-
-#     mag_error_sum = np.sum(np.abs(M_omega))
-#     phase_error_sum = np.sum(np.abs(A_omega))
-#     total_error = mag_error_sum + phase_error_sum
-
-#     if verbose:
-#         print(f"[errorFun] M_sum={mag_error_sum:.6f} | A_sum={phase_error_sum:.6f} " f"| Total={total_error:.6f}")
-
-#     return total_error
-# --- ERROR FUNCTIONS (DÜZELTİLMİŞ SIRALAMA) ---
-
-# def plot_tv_sweep(out_dir: Path, tag: str, tv_scores: dict, best_L: float):
-#     """
-#     Plots the Total Variation (smoothness metric) vs Thickness.
-#     Helps to visualize if the minimum is distinct or flat.
-#     """
-#     l_vals_m = sorted(tv_scores.keys())
-#     l_vals_mm = [l * 1000.0 for l in l_vals_m]
-#     tv_vals = [tv_scores[l] for l in l_vals_m]
-    
-#     best_L_mm = best_L * 1000.0
-#     best_tv = tv_scores[best_L]
-
-#     plt.figure(figsize=(10, 6))
-#     plt.plot(l_vals_mm, tv_vals, 'o-', color='navy', alpha=0.7, label='TV Score')
-#     plt.plot(best_L_mm, best_tv, 'r*', markersize=15, label=f"Selected: {best_L_mm:.4f} mm")
-    
-#     plt.xlabel("Thickness (mm)")
-#     plt.ylabel("Total Variation (Lower is Smoother)")
-#     plt.title(f"Thickness Optimization Sweep: {tag}")
-#     plt.grid(True, which='both', linestyle='--', alpha=0.5)
-#     plt.legend()
-    
-#     filename = out_dir / f"{tag}_TV_Selection_L={best_L_mm:.4f}mm.png"
-#     plt.savefig(filename, dpi=300)
-#     plt.close()
-#     logger.info(f"Saved TV Sweep plot to: {filename}")

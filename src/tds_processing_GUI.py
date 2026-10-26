@@ -79,6 +79,7 @@ class THzInteractivePlotter:
             "unwrap_fit_min": float(getattr(self.proc, "unwrap_fit_min", 0.0)), # Hz
             "unwrap_fit_max": float(getattr(self.proc, "unwrap_fit_max", 0.0)), # Hz
             "fp_term_count": int(getattr(self.proc, "fp_term_count", 0)),
+            "fp_terms_override": None if getattr(self.proc, "fp_terms_override", None) is None else int(self.proc.fp_terms_override),
             "use_backup_unwrap": bool(getattr(self.proc, "use_backup_unwrap", False)),
             "version": 1,
         }
@@ -94,8 +95,13 @@ class THzInteractivePlotter:
             if k in state and state[k] is not None:
                 setattr(self.proc, k, float(state[k]))
 
-        if "fp_term_count" in state:
-            self.proc.fp_term_count = int(state["fp_term_count"])
+        # fp_term_count is derived in recalculate_absorption; only the explicit override is restored
+        if "fp_terms_override" in state and getattr(self.proc, "fp_terms_override", None) is None:
+            override = state["fp_terms_override"]
+            if override is None or (isinstance(override, (int, np.integer)) and not isinstance(override, bool) and override >= 0):
+                self.proc.fp_terms_override = override
+            else:
+                print(f"⚠️ Ignoring invalid saved fp_terms_override: {override!r}")
         if "use_backup_unwrap" in state:
             self.proc.use_backup_unwrap = bool(state["use_backup_unwrap"])
 
@@ -222,7 +228,7 @@ class THzInteractivePlotter:
         ax_box_fp = plt.axes([0.5, box_level_y, 0.04, box_height])
         self.box_fp = TextBox(ax_box_fp,'', initial=str(self.proc.fp_term_count),)
         self.box_fp.on_submit(self._update_fp_text)
-        self.fig.text( 0.5 + 0.04/2, label_y, "FP Count", ha="center", va="center", transform=self.fig.transFigure, bbox=bbox_color,)
+        self.fig.text( 0.5 + 0.04/2, label_y, "FP echoes", ha="center", va="center", transform=self.fig.transFigure, bbox=bbox_color,)
 
         # Unwrapping method buttons
         ax_radio = plt.axes([0.60, 0.02, 0.12, 0.12], frameon=False)
@@ -256,7 +262,8 @@ class THzInteractivePlotter:
                 self.ax_n,       # Refractive index
                 self.ax_alpha,   # Absorption
                 is_export=False,)
-            
+
+            self._sync_fp_box()
             self.fig.canvas.draw_idle()
             
             try:
@@ -430,11 +437,34 @@ class THzInteractivePlotter:
             print("Analysis Range Selection ERROR:", e)
             traceback.print_exc()
 
+    def _sync_fp_box(self):
+        """Shows the FP order in use (auto estimate or override) in the FP Count box."""
+        box = getattr(self, "box_fp", None)
+        text = str(int(getattr(self.proc, "fp_term_count", 0)))
+        if box is None or box.text == text:
+            return
+        prev_lock = self._ui_lock
+        self._ui_lock = True
+        box.set_val(text)
+        self._ui_lock = prev_lock
+
     def _update_fp_text(self, text):
+        if getattr(self, "_ui_lock", False):
+            return
         try:
-            self.proc.fp_term_count = int(text)
+            text = text.strip()
+            if text == "" or text.lower() == "auto":
+                # Empty or 'auto' returns to the automatic estimate from n_avg
+                self.proc.fp_terms_override = None
+            else:
+                count = int(text)
+                if count < 0:
+                    raise ValueError("FP order must be nonnegative.")
+                self.proc.fp_terms_override = count
+            utils.update_fp_from_n_avg(self.proc)
             self._draw_figures()
         except Exception as e:
+            self._sync_fp_box()
             print("FP Number Selection ERROR:", e)
             traceback.print_exc()
 
@@ -470,8 +500,7 @@ class THzInteractivePlotter:
             base_dir = Path(p.sample_path).parent
         except Exception:
             base_dir = Path.cwd()
-
-        filename = f"{getattr(p, 'sample_name', 'Signal')}_report.pdf"
+        filename = f"{p.reference_path.stem}_report.pdf"
         out_path = base_dir / filename
         
         print(f"📍 Target File: {out_path.resolve()}")
@@ -738,26 +767,56 @@ class THzInteractivePlotter:
         # (d) Time Domain
         ax_time.cla()
         y_sample = None
-
+        y_reference = None
+        ref_color = '#c76520'
         if hasattr(p, "reference") and hasattr(p.reference, "y_data"):
-            ax_time.plot(t_ps, np.asarray(p.reference.y_data, dtype=float), 'r', alpha=0.5, label='Reference',)
-
+            y_reference = np.asarray(p.reference.y_data, dtype=float)
         if hasattr(p, "sample") and hasattr(p.sample, "y_data"):
             y_sample = np.asarray(p.sample.y_data, dtype=float)
-            ax_time.plot(t_ps, y_sample, 'b', label='Sample')
+        timing = None
+        if y_sample is not None and y_reference is not None and np.any(y_sample) and np.any(y_reference):
+            ref_index = int(np.argmax(np.abs(y_reference)))
+            polarity = 1 if y_reference[ref_index] >= 0 else -1
+            sample_index = int(np.argmax(polarity * y_sample))
+            timing = dict(reference_peak_time=float(t_ps[ref_index]),
+                          sample_peak_time=float(t_ps[sample_index]),
+                          sample_reference_delay=float(t_ps[sample_index] - t_ps[ref_index]))
+
+        if y_reference is not None:
+            label = f"Reference ({timing['reference_peak_time']:.2f} ps)" if timing else 'Reference'
+            ax_time.plot(t_ps, y_reference, color=ref_color, alpha=0.8, label=label)
+        if y_sample is not None:
+            label = f"Sample ({timing['sample_peak_time']:.2f} ps)" if timing else 'Sample'
+            ax_time.plot(t_ps, y_sample, 'b', label=label)
+        timing_text = []
+        if timing:
+            ax_time.axvline(timing['reference_peak_time'], color=ref_color, linestyle=':', alpha=0.8)
+            ax_time.axvline(timing['sample_peak_time'], color='b', linestyle=':', alpha=0.8)
+            timing_text.append(rf"$\Delta t_{{\mathrm{{sample-ref}}}}={timing['sample_reference_delay']:.2f}\,\mathrm{{ps}}$")
+        fp_spacing = getattr(p, "fp_delta_t", None)
+        if fp_spacing is not None and np.isfinite(fp_spacing) and fp_spacing > 0:
+            timing_text.append(rf"$T_{{\mathrm{{FP,model}}}}\approx{fp_spacing / TIME_SCALE_PS:.2f}\,\mathrm{{ps}}$")
 
         # Fabry–Perot echoes: taken from processor as fp_echo_times in seconds
         if (hasattr(p, "fp_echo_times") and p.fp_echo_times is not None and getattr(p, "fp_term_count", 0) > 0):
-            echo_ns = np.asarray(p.fp_echo_times, dtype=float) / TIME_SCALE_PS  # s → ns
-            for t_line in echo_ns:
-                ax_time.axvline(t_line, color='green', linestyle=':', alpha=0.7)
+            echo_ps = np.asarray(p.fp_echo_times, dtype=float) / TIME_SCALE_PS
+            for index, t_line in enumerate(echo_ps):
+                ax_time.axvline(t_line, color='green', linestyle='--', alpha=0.7,
+                                label='FP echoes (predicted)' if index == 0 else '_nolegend_')
+        if timing_text:
+            ax_time.text(.98, .96, '\n'.join(timing_text), transform=ax_time.transAxes,
+                         ha='right', va='top', fontsize=10,
+                         bbox=dict(facecolor='white', edgecolor='none', alpha=.8))
 
         ax_time.set_ylabel("Amplitude")
         ax_time.set_xlabel("Time (ps)")
-        ax_time.set_title(f"(d) Time-domain signals (FP terms: {getattr(p, 'fp_term_count', 0)})")
+        fp_mode = 'manual' if getattr(p, 'fp_terms_override', None) is not None else 'auto'
+        ax_time.set_title(f"(d) Time-domain signals (FP echoes: {getattr(p, 'fp_term_count', 0)}, {fp_mode})")
         ax_time.autoscale(enable=True, tight=True)
+        if t_ps.size > 1:
+            ax_time.set_xlim(float(t_ps[0]), float(t_ps[-1]))
         ax_time.grid(**grid_kwargs)
-        ax_time.legend(**legend_kwargs)
+        ax_time.legend(loc='upper left', fontsize=10 if is_export else 9)
 
         # (e) Refractive Index n(f)
         ax_n.cla()

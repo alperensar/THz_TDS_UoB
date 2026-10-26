@@ -291,16 +291,3 @@ def load_and_validate_config(cfg_path: str | Path, cli_args: List[str] = None) -
         print("ERROR: Configuration validation failed:")
         print(e)
         raise
-
-
-
-# class FPEstimationConfig(BaseModel):
-#     model_config = ConfigDict(extra="forbid")
-
-#     enabled:                    bool = True
-#     minimum_eps:                float = 1.0
-#     auto_validate_periodicity:  bool = True
-#     periodicity_tolerance:      float = 0.05
-#     allow_override_from_yaml:   bool = True
-#     interactive_selection:      bool = True
-#     min_peaks_for_periodicity:  int=2

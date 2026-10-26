@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import gc
+import re
 import sys
 import copy
 import typer
@@ -15,7 +16,7 @@ import logging
 from tqdm import tqdm
 from pathlib import Path
 from tkinter import filedialog
-from typing import Optional, List
+from typing import Optional, List, Dict, Tuple
 from pydantic import ValidationError
 
 import pickle
@@ -27,27 +28,30 @@ from matplotlib.widgets import Button, TextBox, CheckButtons
 
 import tds_extraction_core as core
 from config import load_and_validate_config, AppConfig
-
-# try:
-#     from mpi4py import MPI
-#     MPI_AVAILABLE = True
-# except ImportError:
-#     MPI_AVAILABLE = False
-
 app = typer.Typer(help="THz-TDS Parameter Extraction CLI")
 logger = logging.getLogger("TDS_CLI")
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
 THZ_TO_FREQ = 1E12
 
-def L_key_um(L_m: float) -> int:
-    return int(round(float(L_m) * 1e6))   # m -> µm (int)
+L_key_um = core.L_key_um                  # m -> µm (nm-rounded), single definition in core
 
-def um_to_m(key_um: int) -> float:
+def um_to_m(key_um: float) -> float:
     return float(key_um) * 1e-6           # µm -> m
 
-def um_to_mm(key_um: int) -> float:
+def um_to_mm(key_um: float) -> float:
     return float(key_um) * 1e-3           # µm -> mm
+
+def matches_pkl_prefix(path: Path, prefix: str, subdir_types) -> bool:
+    """pkl_prefix refers to the original signal stem; preprocessing may prepend 'fpN_' and '<subdir>_'.
+    The prefix is tested at every stripping stage, because the original name may itself start with 'film_'."""
+    candidates = [path.stem]
+    candidates.append(re.sub(r"^fp\d+_", "", candidates[-1]))
+    for sub in subdir_types:
+        if candidates[-1].lower().startswith(sub.lower() + "_"):
+            candidates.append(candidates[-1][len(sub) + 1:])
+            break
+    return any(c.startswith(prefix) for c in candidates)
 
 class ThicknessSelector:
     def __init__(self, tv_scores: dict, nominal_L_m: float, best_L_m: float, tag: str):
@@ -58,7 +62,7 @@ class ThicknessSelector:
         self.selected_L_mm  = self.best_L_mm
         self.tag            = tag
 
-        sorted_keys_um = sorted(self.tv_scores.keys())          # key = int(µm)
+        sorted_keys_um = sorted(self.tv_scores.keys())          # key = µm
         self.l_vals_mm = [um_to_mm(k) for k in sorted_keys_um]  # µm -> mm
         self.tv_vals   = [self.tv_scores[k] for k in sorted_keys_um]
 
@@ -115,10 +119,6 @@ class ThicknessSelector:
         else:
             self.ax.axvline(self.selected_L_mm, color='orange', linestyle='-', linewidth=2, label='User Selected')
 
-        #     self.ax.plot(self.selected_L_mm, sel_tv, 's', color='orange', markersize=12, label='Selected')
-        # else:
-        #     self.ax.axvline(self.selected_L_mm, color='orange', linestyle='-', linewidth=2, label='User Selected')
-
         self.ax.legend()
         self.fig.canvas.draw()
 
@@ -166,6 +166,10 @@ def run_extraction_pipeline(pkl_path: Path, output_root: Path, backend: str, cfg
         logger.error(f"Failed to load {pkl_path}: {e}")
         return
 
+    # Older preprocessing pickles may have stored nearest-bin ROI indices.
+    # Rebuild only the indices; keep the recorded GUI limits, phase and FP state.
+    core.utils.update_indices(pair_org)
+
     # Önceki pencereleri temizle (GUI donmasını önler)
     plt.close('all')
 
@@ -176,8 +180,42 @@ def run_extraction_pipeline(pkl_path: Path, output_root: Path, backend: str, cfg
     base_out = Path(pkl_path).parent.parent / cfg.paths.processed_dir_names
     current_file_stem = pkl_path.stem
 
+    # Process modes as NR -> R for each FP state so rough modes can warm-start from non-rough pairs.
+    raw_modes: List[Tuple[bool, bool]] = []
+    for mode in pe_cfg.processing_modes:
+        if isinstance(mode, (list, tuple)) and len(mode) == 2:
+            raw_modes.append((bool(mode[0]), bool(mode[1])))
+
+    # De-duplicate while preserving order
+    dedup_modes: List[Tuple[bool, bool]] = []
+    for m in raw_modes:
+        if m not in dedup_modes:
+            dedup_modes.append(m)
+
+    fp_order: List[bool] = []
+    for _, fp_state in dedup_modes:
+        if fp_state not in fp_order:
+            fp_order.append(fp_state)
+
+    planned_modes: List[Tuple[bool, bool]] = []
+    for fp_state in fp_order:
+        if (False, fp_state) in dedup_modes:
+            planned_modes.append((False, fp_state))
+        if (True, fp_state) in dedup_modes:
+            planned_modes.append((True, fp_state))
+
+    for m in dedup_modes:
+        if m not in planned_modes:
+            planned_modes.append(m)
+
+    if planned_modes != dedup_modes:
+        logger.info(f"Reordered processing_modes for warm-start pairing: {dedup_modes} -> {planned_modes}")
+
+    # Cache: NR results by FP state, used to seed corresponding rough mode.
+    nr_seed_by_fp: Dict[bool, Dict[str, np.ndarray]] = {}
+
     # Processing Modes Loop (Roughness / FP)
-    for rough, fp in pe_cfg.processing_modes:
+    for rough, fp in planned_modes:
         pair = copy.deepcopy(pair_org)
         
         tag = f"{'R' if rough else 'NR'}_{'FP' if fp else 'NFP'}"
@@ -229,6 +267,15 @@ def run_extraction_pipeline(pkl_path: Path, output_root: Path, backend: str, cfg
                 'roughness':    rough, 
                 'fp':           fp,
                 'bounds':       bounds_info}
+
+            if rough:
+                seed_pack = nr_seed_by_fp.get(fp)
+                if seed_pack is not None:
+                    worker_cfg_step1['seed_n'] = seed_pack['n']
+                    worker_cfg_step1['seed_k'] = seed_pack['k']
+                    logger.info(f"Using warm-start for Step 1 from NR_{'FP' if fp else 'NFP'} -> {tag}")
+                else:
+                    logger.warning(f"No NR pair cached for {tag}. Step 1 will use analytic initialization.")
         
             # --- BACKEND EXECUTION ---
             if backend == "serial":
@@ -270,26 +317,13 @@ def run_extraction_pipeline(pkl_path: Path, output_root: Path, backend: str, cfg
                 logger.warning("No valid results generated from Sweep. Skipping selection.")
                 continue # Diğer moda geç
             else:
-                tv_scores_raw = core.calculate_total_variation(results_data)
+                tv_scores = core.calculate_total_variation(results_data)   # keys: µm
 
-                if len(tv_scores_raw) > 0 and isinstance(next(iter(tv_scores_raw.keys())), float):
-                    tv_scores = {L_key_um(L_m): score for L_m, score in tv_scores_raw.items()}
-                else:
-                    tv_scores = tv_scores_raw
-
-                auto_best_key = min(tv_scores, key=tv_scores.get)   # int (µm)
+                auto_best_key = min(tv_scores, key=tv_scores.get)   # µm
                 auto_best_L_m = um_to_m(auto_best_key)              # m
                 nominal_L     = pair.measured_thickness_m
 
                 print(f"Nominal: {nominal_L*1000:.6f} mm | Auto-Best: {auto_best_L_m*1000:.6f} mm")
-
-                # tv_scores   = core.calculate_total_variation(results_data)
-                # auto_best_L = min(tv_scores, key=tv_scores.get) 
-                # nominal_L   = pair.measured_thickness_m
-
-                # print(f"\n--- Selection for {measurement_name} ---")
-                # print(f"Nominal: {nominal_L*1000:.6f} mm | Auto-Best: {auto_best_L*1000:.6f} mm")
-
                 try:
                     # GUI'yi aç
                     selector = ThicknessSelector(tv_scores, nominal_L, auto_best_L_m, tag)
@@ -324,11 +358,28 @@ def run_extraction_pipeline(pkl_path: Path, output_root: Path, backend: str, cfg
                 'roughness':    rough, 
                 'fp':           fp,
                 'bounds':       bounds_info}
+
+            if rough:
+                seed_pack = nr_seed_by_fp.get(fp)
+                if seed_pack is not None:
+                    worker_cfg_step2['seed_n'] = seed_pack['n']
+                    worker_cfg_step2['seed_k'] = seed_pack['k']
+                    logger.info(f"Using warm-start for Step 2 from NR_{'FP' if fp else 'NFP'} -> {tag}")
+                else:
+                    logger.warning(f"No NR pair cached for {tag}. Step 2 will use analytic initialization.")
             
             _, final_data = core.run_param_extraction((pair, final_L_m, worker_cfg_step2))
 
             if final_data:
                 n_opt, k_opt, H_calc, _, cost, bounds = final_data
+
+                # Save non-rough solution as seed for matching rough mode (same FP state).
+                if not rough:
+                    nr_seed_by_fp[fp] = {
+                        "n": np.asarray(n_opt, dtype=float).copy(),
+                        "k": np.asarray(k_opt, dtype=float).copy(),
+                    }
+                    logger.info(f"Cached warm-start seed for NR_{'FP' if fp else 'NFP'}")
                 
                 offset_val = global_state.get('offset_mm', 0.0)
                 if offset_val is None: offset_val = 0.0
@@ -363,7 +414,7 @@ def run_extraction_pipeline(pkl_path: Path, output_root: Path, backend: str, cfg
 @app.command()
 def main(
     config:         Path = typer.Option("config.yaml",          "--config",         help="Path to the main YAML configuration file.", exists=True, readable=True),
-    root_dir:       Optional[Path] = typer.Option("/Users/alp/Desktop/Toptica_UoB_ROOT" ,         "--root-dir",       help="Path to the RAWDATA folder containing pulsefft subfolders."),
+    root_dir:       Optional[Path] = typer.Option(None,          "--root-dir",       help="Override paths.root_dir from YAML."),
     backend:        str = typer.Option(None,                    "--backend",        help="Execution mode: 'serial' or 'multiprocessing'."),
     no_save:        bool = typer.Option(False,                  "--no-save",        help="Disable all saving (MAT/TXT/PKL)."),
     overrides:      Optional[List[str]] = typer.Argument(None,                      help="CLI overrides in 'key.subkey=value' format (e.g., 'run.interactive=True')."),):
@@ -372,26 +423,7 @@ def main(
     """
     all_overrides = list(overrides) if overrides else []
 
-    if root_dir is None or not root_dir.exists():
-        logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
-        try:
-            root = tk.Tk()
-            root.withdraw()
-            selected = filedialog.askdirectory(title="Select RAWDATA Root Directory")
-        finally:
-            try:
-                root.destroy()
-            except:
-                pass
-            # to remove tkinter from memory
-            gc.collect()
-
-        if not selected:
-            typer.echo(typer.style("🚫 No directory selected. Exiting.", fg=typer.colors.RED), err=True)
-            sys.exit(1)
-        root_dir = Path(selected)
-        all_overrides.append(f"paths.root_dir={root_dir}")
-
+    if root_dir is not None:    all_overrides.append(f"paths.root_dir={root_dir}")
     if backend:                 all_overrides.append(f"param_estimation.backend={backend}")
     if no_save:
         all_overrides += [
@@ -416,6 +448,29 @@ def main(
         typer.echo(typer.style(f"An unexpected error occurred: {e}", fg=typer.colors.RED), err=True)
         sys.exit(1)
 
+    backend = str(backend or cfg.param_estimation.backend).strip().lower()
+    if backend not in {"serial", "multiprocessing"}:
+        raise typer.BadParameter("Backend must be 'serial' or 'multiprocessing'.", param_hint="--backend")
+
+    root_dir = Path(root_dir or cfg.paths.root_dir).expanduser()
+    if not root_dir.is_dir():
+        logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+        try:
+            root = tk.Tk()
+            root.withdraw()
+            selected = filedialog.askdirectory(title="Select RAWDATA Root Directory")
+        finally:
+            try:
+                root.destroy()
+            except:
+                pass
+            gc.collect()
+        if not selected:
+            typer.echo(typer.style("🚫 No directory selected. Exiting.", fg=typer.colors.RED), err=True)
+            sys.exit(1)
+        root_dir = Path(selected)
+    cfg.paths.root_dir = root_dir
+
     typer.echo("📌 Configuration loaded successfully.")
 
     # Find pickle files
@@ -425,7 +480,7 @@ def main(
         logger.warning(f"🚫 No .pkl files found inside {str(cfg.paths.pickle_folder)} subdirectories.")
         raise typer.Exit()
     if cfg.param_estimation.pkl_prefix is not None:
-        [f for f in pkl_files if f.name.startswith(str(cfg.param_estimation.pkl_prefix))]
+        pkl_files = [f for f in pkl_files if matches_pkl_prefix(f, str(cfg.param_estimation.pkl_prefix), cfg.paths.subdir_types)]
         if not pkl_files:
             logger.warning(f"🚫 No .pkl files found with ID {cfg.param_estimation.pkl_prefix}.")
             raise typer.Exit()
@@ -434,27 +489,21 @@ def main(
     logger.info(f"Configuration: Backend={backend}, Res={cfg.param_estimation.scanning_resolution}, Range=+/-{cfg.param_estimation.scanning_range_mm}mm")
     
     extraction_state = {'apply_all': False, 'offset_mm': None}
-    # last_folder = None
-
     for idx, pkl in enumerate(pkl_files):
 
         if cfg.run.start_from_index is not None and idx < cfg.run.start_from_index:
             continue
         if cfg.run.process_only_index is not None and idx != cfg.run.process_only_index:
             continue
-        
-        # current_folder = pkl.parent
-        
-        # if last_folder is not None and current_folder != last_folder:
-        #     logger.info(f"📂 Folder changed to: {current_folder.name}")
-        #     logger.warning("🔄 Resetting 'Apply to All' state for the new folder.")
         extraction_state = {'apply_all': False, 'offset_mm': None}
-        
-        # last_folder = current_folder
         plt.close('all')
 
-        # logger.info(f"[{idx}/{len(pkl_files)}] Processing: {pkl.name}")
-        run_extraction_pipeline(pkl, root_dir, backend, cfg, extraction_state)
+        try:
+            run_extraction_pipeline(pkl, root_dir, backend, cfg, extraction_state)
+        except Exception as e:
+            if not cfg.run.continue_on_error:
+                raise
+            logger.exception("❌ %s failed, continuing with the next file (run.continue_on_error=True): %s", pkl.name, e)
     
     typer.echo("✔️ Processing completed.")
 

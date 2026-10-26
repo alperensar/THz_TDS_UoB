@@ -1,6 +1,6 @@
 # config.yaml
 paths:
-  root_dir:             "/Users/alp/Desktop/Review_IEEE_T_THz/RAWDATA"  # root folder location for the scanned .pulse files IT DOESNOT WORK 
+  root_dir:             "./folder_struct"       # Bundled example data; override with --root-dir
   pulse_dir_names:      ["pulse"]                 # Folder names which includes all time_domain data
   subdir_types:         ["film", "plate"]       # If there is a other folders inside the pulse forder includes the .pulse files
   reference_filename:   "reference.txt"         # If reference measuremets are saved seperately with the name of specified.
@@ -71,14 +71,14 @@ run:
   continue_on_error:          true              # Continue processing other samples if one fails for processed data
 
 param_estimation:
-  step1_algorithm:            "Nelder_Mead"     # For coarse sweeping and detection of the correct optimised thickness
+  step1_algorithm:            "Optimise"        # Thickness sweep; Nelder_Mead barely moves from the seed in 2N dimensions
   step2_algorithm:            "Optimise"        # Final fine 
   backend:                    "Serial"          # "Serial" | "Multiprocessing"
   scanning_resolution:        81                # Number of steps for thickness sweep
   scanning_range_mm:          0.4               # Thickness search range in mm (+/- this value)
   calculation_cores:          8                 # Number of cores for multiprocessing mode specification:eg: 4 | "all-1"
   processing_modes:           [[false, true], [true, false], [false, false], [true, true]] # NRNFP | RNFP | NRFP | NRFP |all. : all means it will run all four methods sequentially and save the results (NRNFP: w/o roughness w/o fp, RNFP: with roughness w/o fp, NRFP: w/o roughness with fp, RFP: with roughness with fp)
-  pkl_prefix:                 "1p4"             # Prefix for pickle files if there are more than 1 pickle files for the same sample
+  pkl_prefix:                 null              # Process all samples; set a prefix to restrict extraction
   optimization_bounds:
       n_bound:                0.15              # Percentage of the bound around the initial value for n
       k_bound:                3                 # Percentage of the bound around the initial value for k
@@ -195,7 +195,6 @@ plot:
     - "RADIX_2.8_7_CANCELLED"
     - "RADIX_2.8_HT_Zprint_15_CANCELLED"
     - "ROGERS_RO3003"
-
 
 # # Material specific overrides for parameter estimation
 # material_overrides:

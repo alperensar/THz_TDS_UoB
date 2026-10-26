@@ -24,10 +24,33 @@ def find_index(array, target):
         diffs = np.abs(array[:, np.newaxis] - target)
         return diffs.argmin(axis=0)
     
+def extraction_window_indices(frequencies, lower, upper):
+    """Inclusive indices with one real FFT bin strictly outside each limit.
+
+    At an exact bin boundary, retain the next bin outside it as well. Clamp at
+    recorded coverage; never synthesize a frequency. Full np.fft.fftfreq output
+    can use its contiguous nonnegative branch for a nonnegative analysis band.
+    """
+    frequencies = np.asarray(frequencies, dtype=float)
+    if frequencies.ndim != 1 or not frequencies.size or not np.isfinite(frequencies).all():
+        raise ValueError("Extraction requires a nonempty finite frequency axis.")
+    if not np.isfinite(lower) or not np.isfinite(upper) or lower > upper:
+        raise ValueError("Extraction limits must be finite and ordered.")
+    if np.any(np.diff(frequencies) <= 0):
+        negative = np.flatnonzero(frequencies < 0)
+        if lower >= 0 and negative.size and np.all(frequencies[negative[0]:] < 0):
+            frequencies = frequencies[:negative[0]]
+        if not frequencies.size or np.any(np.diff(frequencies) <= 0):
+            raise ValueError("Extraction frequencies must be strictly increasing within the selected FFT branch.")
+    start = max(0, min(len(frequencies) - 1, int(np.searchsorted(frequencies, lower, side="left")) - 1))
+    stop = max(0, min(len(frequencies) - 1, int(np.searchsorted(frequencies, upper, side="right"))))
+    return start, stop
+
+
 def update_indices(self):
-    """It is updating extraction and unwrapping ranges on variable"""
-    self.x_min_index = find_index(self.fft_freqs, self.f_min_extract)
-    self.x_max_index = find_index(self.fft_freqs, self.f_max_extract)
+    """Keep extraction boundary bins while preserving the unwrap fit window."""
+    self.x_min_index, self.x_max_index = extraction_window_indices(
+        self.fft_freqs, self.f_min_extract, self.f_max_extract)
     self.unwrap_min_idx = find_index(self.fft_freqs, self.unwrap_fit_min)
     self.unwrap_max_idx = find_index(self.fft_freqs, self.unwrap_fit_max)
     self.freqs_interest = self.fft_freqs[self.x_min_index:self.x_max_index+1]   # Add 1 such that the final index is inclusive
@@ -103,6 +126,19 @@ def recalculate_absorption(self):
     update_fp_from_n_avg(self)
 
 def update_fp_from_n_avg(self):
+    """Refresh echo timing while preserving an explicit FP-order selection."""
+    _estimate_fp_from_n_avg(self)
+    override = getattr(self, "fp_terms_override", None)
+    if override is not None:
+        self.fp_term_count = int(override)
+        if self.fp_t_peak is not None and self.fp_delta_t is not None:
+            orders = np.arange(1, self.fp_term_count + 1, dtype=float)
+            self.fp_echo_times = self.fp_t_peak + orders * self.fp_delta_t
+        else:
+            self.fp_echo_times = np.array([])
+
+
+def _estimate_fp_from_n_avg(self):
     """
     Calculates the number of Fabry–Perot echoes and their timings using the average 
     refractive index from recalculate_absorption
@@ -272,28 +308,3 @@ def phase_extrapolation(self):
     else:
         self.popt_backup = [0,0]; 
         self.zero_unwrapped_phase_backup = self.backup_unwrap
-
-
-
-# WILL BE REMOVED
-# def clean_signal_name(file_path):
-#     """
-#     Extracts and cleans the name of the signal file for display or labeling.
-#     """
-#     file_name = Path(file_path).name           # OS independent taking path
-#     cleaned_name = (file_name.upper()
-#                     .replace("FOC", " ")
-#                     .replace("COL", " ")
-#                     .replace(".TXT", " ")
-#                     .replace("_", " ")
-#                     .replace("ROGERS", " "))
-#     return cleaned_name.strip()
-
-# def configure_axis(ax, ylabel=None, xlabel=None, title=None):
-    # """Confugure the axis"""
-    # if ylabel:  ax.set_ylabel(ylabel, fontsize=14)
-    # if xlabel:  ax.set_xlabel(xlabel, fontsize=14)
-    # if title:   ax.set_title(title, fontsize=14)
-    # ax.yaxis.set_label_coords(-0.1, 0.5)
-    # ax.tick_params(axis='both', labelsize=11)
-    # ax.grid(True, linestyle='--', alpha=0.6)
