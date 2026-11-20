@@ -51,3 +51,5 @@ mlruns/
 # --- Local-only configs (sample) ---
 configs/local.yaml
 .env
+
+.venv-tools/

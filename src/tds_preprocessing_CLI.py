@@ -10,6 +10,11 @@ from __future__ import annotations
 
 import gc
 import sys
+
+if sys.platform == "win32":
+    for stream in (sys.stdout, sys.stderr):
+        if stream is not None and hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
 import typer
 import logging
 from tqdm import tqdm
@@ -387,7 +392,7 @@ def run_processing_pipeline(cfg: AppConfig):
 @app.command()
 def main(
     config:         Path = typer.Option("config.yaml",         "--config",         help="Path to the main YAML configuration file.", exists=True, readable=True),
-    root_dir:       Optional[Path] = typer.Option(None,        "--root-dir",       help="Override paths.root_dir (main dataset directory)"),
+    root_dir:       Optional[Path] = typer.Option(None,        "--root-dir",       exists=True, file_okay=False, help="Override paths.root_dir (main dataset directory)"),
     reference_name: Optional[str] = typer.Option(None,         "--reference-name", help="Override paths.reference_filename."),
     no_save:        bool = typer.Option(False,                 "--no-save",        help="Disable all saving (MAT/TXT/PKL)."),
     start_from:     Optional[int] = typer.Option(None,         "--start",          help="Start processing from this index, overrides run.start_from_index"),

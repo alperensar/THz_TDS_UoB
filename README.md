@@ -1,5 +1,15 @@
 # THz-TDS Dielectric Parameter Extraction Algorithm
 
+![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)
+![GUI](https://img.shields.io/badge/GUI-Tkinter-3776AB)
+![Version](https://img.shields.io/badge/version-0.2.1-6f42c1)
+
+**Time-domain spectroscopy processing and dielectric-parameter extraction with Geometrical Optics surface scattering and Fabry–Pérot terms.**
+
+**Version: 0.2.1 — Initialisation Correction.**
+
+This maintenance release addresses installation and initialisation failures reported on Windows. It introduces a repository-aware installer with isolated tool and runtime environments, locks the Excel export dependency, and replaces machine-specific dataset defaults. The electromagnetic formulation introduced in version 0.2.0 is retained.
+
 **Version: 0.2.0 — RoE revision with the corrected surface-scattering model.**
 
 > [!CAUTION]
@@ -11,33 +21,81 @@ This software is an in-house developed algorithm at the University of Birmingham
 
 - **Two-Stage Extraction:** Conversion from measured time-domain signals to frequency-domain parameter extraction.
 - **Optimization:** Nelder-Mead simplex and least-squares optimization routines.
-- **Surface Roughness Modeling:** Accounts for surface-scattering attenuation using a GO-based model, subject to its validity conditions.
+- **Surface Roughness Modeling:** Accounts for surface-scattering attenuation using Geometrical Optics, together with configurable Fabry–Pérot terms for internal reflections, subject to the applicable model assumptions.
 - **Parallel Processing:** Serial and multiprocessing execution for parameter extraction.
 - **Interactive Workflow:** GUI controls for preprocessing parameters and visual inspection before saving results.
 
 ## 📦 Installation & Setup
 
-Use **Python 3.12** for the committed dependency lock. Run the following commands from the repository directory.
+### 1. Download and open the repository folder
 
-```bash
-# Create and activate a virtual environment (macOS/Linux).
-python3.12 -m venv .venv
-source .venv/bin/activate
+Download the repository as a ZIP using **Code → Download ZIP**, then extract it. Open the extracted folder that contains `install.py`, `pyproject.toml`, `config.yaml` and the `src` directory. In VS Code, use **File → Open Folder**, then **Terminal → New Terminal**. Keep the complete repository together.
 
-# Install the locked runtime dependencies.
-python -m pip install --upgrade pip
-python -m pip install "poetry==2.2.1"
-poetry install --only main --no-root
+### 2. Install Python 3.12
 
-# Install the Excel writer required by result exports.
-python -m pip install "openpyxl>=3.1,<4"
-```
+Use **Python 3.12**, including **Tcl/Tk and IDLE**, from [python.org](https://www.python.org/downloads/). Include the Python launcher when installing on Windows. On Linux, install Python 3.12 with its venv and Tkinter packages through your distribution's package manager.
 
-On Windows PowerShell, create the environment with `py -3.12 -m venv .venv` and activate it with `.\.venv\Scripts\Activate.ps1`; then run the same installation commands starting at `python -m pip install --upgrade pip`.
+### 3. Run the installer
 
-`poetry.lock` pins the main runtime dependencies. The Excel writer is installed separately because it is not yet included in the lock. GUI workflows also require a working **Tkinter/Tcl-Tk** installation and a graphical desktop.
+**Windows PowerShell**
 
-Set `paths.root_dir` in [config.yaml](config.yaml) to your dataset directory, or pass `--root-dir` when running either CLI. Other configuration settings control input columns, time units, frequency ranges, extraction modes and output folders.
+~~~powershell
+py -3.12 install.py
+~~~
+
+**macOS and Linux**
+
+~~~bash
+python3.12 install.py
+~~~
+
+The installer creates the runtime in `.venv` and keeps Poetry 2.2.1 in `.venv-tools`. It runs from the repository directory, installs the committed runtime lock, checks dependency consistency and imports the required libraries. Environment activation and PowerShell execution-policy changes are unnecessary. Rerun the same command after an interrupted download.
+
+### 4. Preprocess the time signals
+
+Replace the example path below with your measurement root. Keep paths containing spaces inside quotes.
+
+**Windows PowerShell**
+
+~~~powershell
+.\.venv\Scripts\python.exe src/tds_preprocessing_CLI.py --config config.yaml --root-dir "C:/Users/YourName/Documents/TDS measurements"
+~~~
+
+**macOS and Linux**
+
+~~~bash
+.venv/bin/python src/tds_preprocessing_CLI.py --config config.yaml --root-dir "/path/to/your/TDS measurements"
+~~~
+
+### 5. Extract the material parameters
+
+After preprocessing finishes, run extraction with the same measurement root.
+
+**Windows PowerShell**
+
+~~~powershell
+.\.venv\Scripts\python.exe src/tds_extraction_CLI.py --config config.yaml --root-dir "C:/Users/YourName/Documents/TDS measurements" --backend serial
+~~~
+
+**macOS and Linux**
+
+~~~bash
+.venv/bin/python src/tds_extraction_CLI.py --config config.yaml --root-dir "/path/to/your/TDS measurements" --backend serial
+~~~
+
+Replace `serial` with `multiprocessing` to use multiple CPU workers. The interactive workflow requires a graphical desktop. To check Tkinter independently, run `.\.venv\Scripts\python.exe -m tkinter` on Windows or `.venv/bin/python -m tkinter` on macOS/Linux.
+
+The default `paths.root_dir` points to the included `folder_struct` example. Set `--root-dir` or edit `config.yaml` for your measurements. Preserve nested instrument and method directories.
+
+### Troubleshooting
+
+- **`Group(s) not found: main (via --only)`.** Run `install.py` from this release. It invokes Poetry 2.2.1 from its own environment and selects this repository explicitly. Check that the folder contains the supplied `pyproject.toml` and `poetry.lock`.
+- **`[Errno 2] No such file or directory` when starting a CLI.** Check the filename named in the error. If it is `src/tds_preprocessing_CLI.py`, the terminal is outside the repository root or the archive was not fully extracted. Open the folder containing `src` and repeat the documented command. Replace example dataset paths with existing directories.
+- **Python 3.12 cannot be found.** Install Python 3.12, reopen the terminal and repeat step 3.
+- **Tkinter cannot be imported.** Repair Python with Tcl/Tk enabled. On Linux, install the Tkinter package for Python 3.12.
+- **An old environment uses another Python version.** Rename that environment and rerun the installer.
+- **No measurements are found.** Check the quoted dataset path, directory structure, metadata filename and column headers.
+- **A download fails.** Check the connection and rerun the installer. Include the complete terminal error when reporting a problem.
 
 ## ⚙️ Data Structure Requirements
 
@@ -87,27 +145,7 @@ See [folder_struct/thickness.txt](folder_struct/thickness.txt) for an example wi
 
 ## 🛠 Execution Modes
 
-Run commands from the repository root with the virtual environment activated. Replace `/path/to/Root_Directory` with your dataset path.
-
-**1. Preprocessing and FFT:**
-
-```bash
-python src/tds_preprocessing_CLI.py --config config.yaml --root-dir /path/to/Root_Directory
-```
-
-**2. Parameter extraction on one CPU core:**
-
-```bash
-python src/tds_extraction_CLI.py --config config.yaml --root-dir /path/to/Root_Directory --backend serial
-```
-
-**3. Parameter extraction with multiprocessing:**
-
-```bash
-python src/tds_extraction_CLI.py --config config.yaml --root-dir /path/to/Root_Directory --backend multiprocessing
-```
-
-Choose either extraction backend after preprocessing. Omit `--root-dir` to use the configured `paths.root_dir`. Use `--help` with either script to inspect its options.
+Run the commands in [Installation & Setup](#-installation--setup) from the repository root. The `.venv` interpreter works directly, without activation. Supply an existing measurement directory in quotes for `--root-dir`; the example path is a placeholder. Use `--help` with either script to inspect its options.
 
 ### Optional VS Code Launch Configuration
 

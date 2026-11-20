@@ -10,6 +10,11 @@ from __future__ import annotations
 import gc
 import re
 import sys
+
+if sys.platform == "win32":
+    for stream in (sys.stdout, sys.stderr):
+        if stream is not None and hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
 import copy
 import typer
 import logging
@@ -414,7 +419,7 @@ def run_extraction_pipeline(pkl_path: Path, output_root: Path, backend: str, cfg
 @app.command()
 def main(
     config:         Path = typer.Option("config.yaml",          "--config",         help="Path to the main YAML configuration file.", exists=True, readable=True),
-    root_dir:       Optional[Path] = typer.Option(None,          "--root-dir",       help="Override paths.root_dir from YAML."),
+    root_dir:       Optional[Path] = typer.Option(None,          "--root-dir",       exists=True, file_okay=False, help="Override paths.root_dir from YAML."),
     backend:        str = typer.Option(None,                    "--backend",        help="Execution mode: 'serial' or 'multiprocessing'."),
     no_save:        bool = typer.Option(False,                  "--no-save",        help="Disable all saving (MAT/TXT/PKL)."),
     overrides:      Optional[List[str]] = typer.Argument(None,                      help="CLI overrides in 'key.subkey=value' format (e.g., 'run.interactive=True')."),):
