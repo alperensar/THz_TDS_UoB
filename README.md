@@ -4,11 +4,9 @@
 ![GUI](https://img.shields.io/badge/GUI-Tkinter-3776AB)
 ![Version](https://img.shields.io/badge/version-0.2.1-6f42c1)
 
-**Time-domain spectroscopy processing and dielectric-parameter extraction with Geometrical Optics surface scattering and Fabry–Pérot terms.**
-
 **Version: 0.2.1 — Initialisation Correction.**
 
-This maintenance release addresses installation and initialisation failures reported on Windows. It introduces a repository-aware installer with isolated tool and runtime environments, locks the Excel export dependency, and replaces machine-specific dataset defaults. The electromagnetic formulation introduced in version 0.2.0 is retained.
+This maintenance release addresses installation and initialisation failures reported on Windows.
 
 **Version: 0.2.0 — RoE revision with the corrected surface-scattering model.**
 
@@ -49,7 +47,7 @@ py -3.12 install.py
 python3.12 install.py
 ~~~
 
-The installer creates the runtime in `.venv` and keeps Poetry 2.2.1 in `.venv-tools`. It runs from the repository directory, installs the committed runtime lock, checks dependency consistency and imports the required libraries. Environment activation and PowerShell execution-policy changes are unnecessary. Rerun the same command after an interrupted download.
+The installer creates the runtime in `.venv` and keeps Poetry 2.2.1 in `.venv-tools`. It runs from the repository directory, installs the committed runtime lock, checks dependency consistency and imports the required libraries.
 
 ### 4. Preprocess the time signals
 
@@ -276,3 +274,7 @@ You can access the full dataset via the link below:
 **Alperen Sari - PHDing at the University of Birmingham**
 
 GitHub: [@alperensar](https://github.com/alperensar)
+
+Email: [alperensari09@gmail.com](mailto:alperensari09@gmail.com)
+
+Feedback, issue reports and suggestions are welcome. If you encounter a problem or have a recommendation for improving the software, please open a GitHub issue or contact the author by email.
