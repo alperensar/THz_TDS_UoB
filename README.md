@@ -13,7 +13,7 @@ This maintenance release addresses installation and initialisation failures repo
 > [!CAUTION]
 > **Updated surface-scattering model.** This version corrects excess attenuation and reference-plane errors in the earlier formulation, with validation against CST simulations. For the current model derivation, see **Publication 1 (RoE, under review)** in [Citations & References](#-citations--references). Details are given in [Disclosure & Historical Note](#-disclosure--historical-note).
 
-This software is an in-house developed algorithm at the University of Birmingham designed to extract complex dielectric parameters from **Terahertz Time-Domain Spectroscopy (THz-TDS)** measurements. It features a dual-stage workflow, advanced optimization routines, and a unique surface roughness-induced scattering compensation model based on Geometric Optics.
+This software extracts complex dielectric parameters from **Terahertz Time-Domain Spectroscopy (THz-TDS)** measurements.
 
 ## 🚀 Key Features
 
@@ -216,16 +216,12 @@ The comparison below shows an Al₂O₃ slab under TM illumination, with a thick
 
 ## 📚 Citations & References
 
-If you use this algorithm or its GO-based surface-scattering model, cite the relevant studies below. Use **Publication 1 for the current model derivation**.
+If you use this algorithm or its GO-based surface-scattering model, use **Publication 1 for the current model derivation**. BibTeX entries for related published studies are provided below.
 
 > [!CAUTION]
 > **Publication 1 — CURRENT MODEL DERIVATION · UNDER REVIEW**
 >
 > Alperen Sari, Yeganeh Farahi, Xen Sergi, Costas Constantinou and Miguel Navarro-Cía, “Validation and Uncertainties of a Geometrical Optics-Based Surface Scattering-Aware Dielectric Parameter Extraction Algorithm,” *Reviews of Electromagnetics*, EuCAP 2026 Special Issue, 2026. **Under Review.**
-
-**Publication 2 — Published:** A. Sari et al., “Interlaboratory mmWave and THz Quasi-Optical Characterization of Commercial Conventional and 3-D Printable Substrates,” *IEEE Transactions on Terahertz Science and Technology*, vol. 16, no. 6, pp. 737–749, 2026. [DOI: 10.1109/TTHZ.2026.3674230](https://doi.org/10.1109/TTHZ.2026.3674230).
-
-**Publication 3 — Published:** A. Sari, Y. Farahi, C. Constantinou and M. Navarro-Cía, “Uncertainty Analysis of a Surface Scattering-Aware Material Extraction Algorithm for THz-TDS Systems,” *2026 20th European Conference on Antennas and Propagation (EuCAP)*, Dublin, Ireland, 2026. [DOI: 10.23919/EuCAP68105.2026.11612344](https://doi.org/10.23919/EuCAP68105.2026.11612344).
 
 **BibTeX:**
 
@@ -271,7 +267,7 @@ You can access the full dataset via the link below:
 
 ## 👤 Author
 
-**Alperen Sari - PHDing at the University of Birmingham**
+**Alperen Sari — PhD Candidate, University of Birmingham**
 
 GitHub: [@alperensar](https://github.com/alperensar)
 
